@@ -5,7 +5,6 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from app.config import get_settings
-from app.auth import MCPAuthMiddleware
 from app.database import init_db
 from app.routes import health, memories, mcp
 
