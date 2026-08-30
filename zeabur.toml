@@ -1,0 +1,13 @@
+[build]
+dockerfile = "Dockerfile"
+
+[deploy]
+port = 8000
+
+[deploy.volumes]
+# 持久化数据库
+"/data" = "memory-data"
+
+[deploy.env]
+DATABASE_PATH = "/data/memory.db"
+ENVIRONMENT = "production"
