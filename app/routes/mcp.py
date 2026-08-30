@@ -1,8 +1,11 @@
 from fastapi import APIRouter, Request, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Dict
 import json
 import logging
+import asyncio
+from datetime import datetime
 
 from app.services.memory_service import get_memory_service
 from app.models.memory import MemoryCreate
@@ -16,21 +19,69 @@ class MCPRequest(BaseModel):
     params: Optional[dict] = None
     id: Optional[str] = None
 
+# 存储活跃的 SSE 连接
+active_connections: Dict[str, asyncio.Queue] = {}
+
+async def sse_generator(connection_id: str):
+    """SSE 事件流生成器"""
+    try:
+        # 发送初始化事件
+        yield f"event: init\ndata: {json.dumps({'type': 'init', 'status': 'connected', 'connectionId': connection_id})}\n\n"
+        
+        queue = active_connections.get(connection_id)
+        if not queue:
+            queue = asyncio.Queue()
+            active_connections[connection_id] = queue
+        
+        # 保持连接活跃，发送心跳
+        while True:
+            try:
+                # 等待消息，超时 30 秒发送心跳
+                message = await asyncio.wait_for(queue.get(), timeout=30.0)
+                yield f"event: message\ndata: {json.dumps(message)}\n\n"
+            except asyncio.TimeoutError:
+                # 发送心跳保持连接
+                yield f"event: ping\ndata: {json.dumps({'type': 'ping', 'timestamp': datetime.now().isoformat()})}\n\n"
+    except asyncio.CancelledError:
+        logger.info(f"SSE 连接 {connection_id} 已关闭")
+    finally:
+        if connection_id in active_connections:
+            del active_connections[connection_id]
+
 @router.get("/")
-async def mcp_get():
-    """GET 请求返回服务信息（兼容 Kelivo 发现）"""
-    return {
-        "name": "memory-system",
-        "version": "1.0.0",
-        "description": "AI 长期记忆系统 MCP 服务",
-        "protocol": "mcp",
-        "capabilities": ["tools"]
-    }
+async def mcp_sse(request: Request):
+    """
+    SSE 端点 - 用于 MCP 协议的长连接通信
+    """
+    connection_id = request.headers.get("X-Connection-Id", f"conn_{datetime.now().timestamp()}")
+    
+    # 获取认证信息
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+    
+    # 这里可以验证 token，但交给中间件处理
+    
+    logger.info(f"新的 SSE 连接: {connection_id}")
+    
+    # 创建 SSE 队列
+    if connection_id not in active_connections:
+        active_connections[connection_id] = asyncio.Queue()
+    
+    return StreamingResponse(
+        sse_generator(connection_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
 
 @router.post("/")
 async def mcp_handler(request: MCPRequest):
     """
-    MCP 端点 - 处理 Kelivo 的 MCP 协议请求
+    MCP 端点 - 处理工具调用请求 (POST)
     """
     service = get_memory_service()
     method = request.method
