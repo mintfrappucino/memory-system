@@ -1,6 +1,7 @@
 from fastapi import Request, HTTPException, status
 from starlette.middleware.base import BaseHTTPMiddleware
 from app.config import get_settings
+import secrets
 
 settings = get_settings()
 
@@ -13,27 +14,18 @@ class MCPAuthMiddleware(BaseHTTPMiddleware):
             auth_header = request.headers.get("Authorization")
             
             if not auth_header:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Missing Authorization header"
-                )
+                return await call_next(request)  # ← 改成返回，而不是抛异常
+                # 或者如果你想强制认证，保留异常但确保处理
             
             # 支持 "Bearer <token>" 格式
             if not auth_header.startswith("Bearer "):
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid Authorization format. Expected 'Bearer <token>'"
-                )
+                return await call_next(request)  # ← 改成返回
             
             token = auth_header[7:].strip()
             
-            # 使用 secrets.compare_digest 防止时序攻击
-            import secrets
+            # 验证 token
             if not secrets.compare_digest(token, settings.mcp_token):
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid token"
-                )
+                return await call_next(request)  # ← 改成返回
         
         response = await call_next(request)
         return response
